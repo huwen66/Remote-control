@@ -137,6 +137,40 @@ def _request_screen_capture_permission():
         return False
 
 
+def _check_accessibility_permission():
+    """检查是否有辅助功能权限"""
+    import platform
+    if platform.system() != "Darwin":
+        return True
+    try:
+        import ctypes, ctypes.util
+        hiservices = ctypes.CDLL(ctypes.util.find_library("HIServices"))
+        hiservices.AXIsProcessTrusted.restype = ctypes.c_bool
+        hiservices.AXIsProcessTrusted.argtypes = []
+        return hiservices.AXIsProcessTrusted()
+    except Exception:
+        return True
+
+
+def _request_accessibility_permission():
+    """请求辅助功能权限（打开系统设置的辅助功能页面）"""
+    import platform
+    if platform.system() != "Darwin":
+        return
+    try:
+        import subprocess
+        subprocess.run([
+            "osascript", "-e",
+            'tell application "System Preferences" to activate'
+        ])
+        subprocess.run([
+            "osascript", "-e",
+            'tell application "System Preferences" to reveal anchor "Privacy_Accessibility" of pane id "com.apple.preference.security"'
+        ])
+    except Exception:
+        pass
+
+
 def _build_grab_fn():
     import platform
     if platform.system() != "Darwin":
@@ -159,11 +193,12 @@ def _lazy_server_init():
 
 
 class HostServer:
-    def __init__(self, port, code, on_status, on_permission_needed=None):
+    def __init__(self, port, code, on_status, on_permission_needed=None, on_accessibility_needed=None):
         self.port        = port
         self.code        = code
         self.on_status   = on_status
         self.on_permission_needed = on_permission_needed
+        self.on_accessibility_needed = on_accessibility_needed
         self.server_sock = None
         self.client_sock = None
         self.running     = False
@@ -171,6 +206,7 @@ class HostServer:
         self.screen_w    = 0
         self.screen_h    = 0
         self._perm_requested = False
+        self._access_requested = False
 
     def start(self):
         _lazy_server_init()
@@ -265,6 +301,12 @@ class HostServer:
 
     def _execute_event(self, ev):
         try:
+            if not _check_accessibility_permission():
+                if not self._access_requested and self.on_accessibility_needed:
+                    self._access_requested = True
+                    self.on_accessibility_needed()
+                return
+            self._access_requested = False
             kind = ev.get("kind")
             if kind == "mouse_move":
                 _pyautogui.moveTo(ev["x"], ev["y"], duration=0)
@@ -404,7 +446,8 @@ class App:
     def _auto_start_host(self):
         def _do():
             srv = HostServer(DEFAULT_PORT, self._code, self._on_server_status,
-                             on_permission_needed=self._on_permission_needed)
+                             on_permission_needed=self._on_permission_needed,
+                             on_accessibility_needed=self._on_accessibility_needed)
             try:
                 srv.start()
                 self._server = srv
@@ -414,7 +457,7 @@ class App:
         threading.Thread(target=_do, daemon=True).start()
 
     def _on_permission_needed(self):
-        """服务端需要权限时回调，在主线程请求权限"""
+        """服务端需要屏幕录制权限时回调，在主线程请求权限"""
         self.root.after(0, self._request_screen_permission)
 
     def _request_screen_permission(self):
@@ -423,6 +466,17 @@ class App:
         if platform.system() != "Darwin":
             return
         _request_screen_capture_permission()
+
+    def _on_accessibility_needed(self):
+        """服务端需要辅助功能权限时回调，在主线程请求权限"""
+        self.root.after(0, self._request_accessibility)
+
+    def _request_accessibility(self):
+        """在主线程请求辅助功能权限"""
+        import platform
+        if platform.system() != "Darwin":
+            return
+        _request_accessibility_permission()
 
     def _on_host_ready(self):
         if self._mode != "home":

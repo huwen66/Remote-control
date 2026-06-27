@@ -1,4 +1,4 @@
-('/Users/zhou/Desktop/AI_tool/remote_control/build/app/PYZ-00.pyz',
+('/Users/zhou/Desktop/AI_tool/Remote-control/build/app/PYZ-00.pyz',
  [('AppKit',
    '/Users/zhou/Library/Python/3.11/lib/python/site-packages/AppKit/__init__.py',
    'PYMODULE'),
