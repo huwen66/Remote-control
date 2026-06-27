@@ -523,27 +523,34 @@ class App:
 
         self.root = tk.Tk()
 
-        # --- DPI / scaling 处理 ---
-        # Mac 默认 DPI=72，Windows 默认 DPI=96，高 DPI 屏更大。
-        # 我们读取系统真实 DPI，以 Mac 的 96 DPI 为基准（Mac 物理感官接近该值）
-        # 计算 UI scale 并写入 tk scaling，使字体和布局在两个平台视觉一致。
+        # ── DPI 处理（Windows 专用）──────────────────────────────────────────
+        # 关键事实：
+        #   1. SetProcessDpiAwareness(2) 已告知 Windows"不要帮我缩放"，
+        #      所以 geometry() 里的数字直接对应物理像素。
+        #   2. tk scaling 只影响【字体点到像素的换算】，不影响 geometry 尺寸。
+        #   3. Mac 上 Tk 默认 scaling = 1.3318（≈96/72），字体和间距显得更大；
+        #      Windows 上 Tk 默认 scaling ≈ 1.0（96dpi 屏），字体更小。
+        #
+        # 正确策略：
+        #   - 用 _dpi_scale（物理像素倍数）缩放 geometry 窗口尺寸
+        #   - 用同样系数设置 tk scaling，让字体也等比放大
+        #   - 两者用同一个系数，内容比例就不会乱
         if platform.system() == "Windows":
             try:
                 import ctypes
                 sys_dpi = ctypes.windll.user32.GetDpiForSystem()
             except Exception:
                 sys_dpi = 96
-            # Mac 的 Tk 默认 scaling = screen_dpi/72，Windows 用同一公式对齐，
-            # 使两端 geometry("900x600") 对应相同的物理感知尺寸。
-            win_scaling = sys_dpi / 72.0
-            self._ui_scale = win_scaling
+            # 以 96 DPI（Windows 100% 缩放）为设计基准
+            # Mac 默认 tk scaling=1.3318，所以 Windows 也要乘以相同系数对齐视觉
+            self._dpi_scale = sys_dpi / 96.0          # 物理像素倍数（用于 geometry）
+            tk_scaling = self._dpi_scale * 1.3318      # 字体对齐 Mac 视觉基准
             try:
-                self.root.tk.call("tk", "scaling", win_scaling)
+                self.root.tk.call("tk", "scaling", tk_scaling)
             except Exception:
                 pass
         else:
-            # Mac/Linux：保持 Tk 系统默认 scaling，不干预
-            self._ui_scale = 1.0
+            self._dpi_scale = 1.0   # Mac/Linux 不干预，geometry 用逻辑点即可
         self.root.title("远程控制")
         self.root.configure(bg="#0f1117")
         self.root.lift()
@@ -696,15 +703,16 @@ class App:
         if hasattr(self, "canvas"):
             del self.canvas
 
-        # tk scaling 已经把逻辑点换算为物理像素，这里直接用设计值即可。
-        # 不要再乘 _ui_scale，否则会双重放大。
-        W, H = 900, 600
+        # _dpi_scale：物理像素倍数（Windows: sys_dpi/96，Mac: 1.0）
+        # geometry() 在 Windows 上直接是物理像素，必须手动乘以倍数；
+        # tk scaling 已处理字体，_fs/_sp 只做整数取整避免模糊。
+        sc = self._dpi_scale
+        W, H = int(900 * sc), int(600 * sc)
         self.root.geometry(f"{W}x{H}")
         self.root.resizable(False, False)
 
-        # 无需额外缩放，_fs/_sp 直接返回原值
-        def _fs(base): return base
-        def _sp(base): return base
+        def _fs(base): return max(1, round(base * sc))
+        def _sp(base): return max(1, round(base * sc))
 
         BG       = "#0d1117"
         PANEL    = "#161b22"
