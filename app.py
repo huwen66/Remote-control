@@ -9,6 +9,7 @@ import struct
 import json
 import sys
 import os
+import platform
 import tkinter as tk
 from tkinter import messagebox, simpledialog
 from PIL import Image, ImageTk
@@ -28,9 +29,41 @@ def _log(msg):
     except Exception:
         pass
 
+# macOS 底层鼠标事件注入（使用 Quartz）
+_quartz_mouse = None
+if platform.system() == "Darwin":
+    try:
+        import Quartz
+        def _quartz_click(x, y, button='left'):
+            """使用 Quartz 发送鼠标事件，绕过窗口阻挡"""
+            try:
+                down_type = Quartz.kCGEventLeftMouseDown if button in ('left', 'primary') else \
+                           Quartz.kCGEventRightMouseDown if button == 'right' else \
+                           Quartz.kCGEventOtherMouseDown
+                up_type = Quartz.kCGEventLeftMouseUp if button in ('left', 'primary') else \
+                         Quartz.kCGEventRightMouseUp if button == 'right' else \
+                         Quartz.kCGEventOtherMouseUp
+                pt = Quartz.CGPoint(x, y)
+                down = Quartz.CGEventCreateMouseEvent(None, down_type, pt, 
+                    Quartz.kCGMouseButtonLeft if button in ('left', 'primary') else \
+                    Quartz.kCGMouseButtonRight if button == 'right' else \
+                    Quartz.kCGMouseButtonCenter)
+                up = Quartz.CGEventCreateMouseEvent(None, up_type, pt,
+                    Quartz.kCGMouseButtonLeft if button in ('left', 'primary') else \
+                    Quartz.kCGMouseButtonRight if button == 'right' else \
+                    Quartz.kCGMouseButtonCenter)
+                Quartz.CGEventPost(Quartz.kCGHIDEventTap, down)
+                Quartz.CGEventPost(Quartz.kCGHIDEventTap, up)
+            except Exception as e:
+                _log(f"Quartz click 失败: {e}")
+        _quartz_mouse = _quartz_click
+    except Exception:
+        _log("Quartz 导入失败")
+        _quartz_mouse = None
+
 DEFAULT_PORT   = 5900
-JPEG_QUALITY   = 55
-FRAME_INTERVAL = 0.05
+JPEG_QUALITY   = 75          # 图像质量（0-100），75 平衡质量和速度
+FRAME_INTERVAL = 0.08        # 帧间隔，约 12 FPS，网络条件差时可降低
 DISPLAY_W      = 1280
 DISPLAY_H      = 800
 
@@ -276,12 +309,14 @@ class HostServer:
             self.connected   = False
 
     def _send_frames(self, conn):
+        import hashlib
         buf = io.BytesIO()
+        last_hash = None
+        same_frame_count = 0
         while self.connected:
             try:
                 img = _grab_screen()
                 if img is None:
-                    # 截图失败，请求权限（仅请求一次）
                     if not self._perm_requested and self.on_permission_needed:
                         self._perm_requested = True
                         self.on_permission_needed()
@@ -291,10 +326,25 @@ class HostServer:
                 buf.seek(0)
                 buf.truncate(0)
                 img.save(buf, format="JPEG", quality=JPEG_QUALITY, optimize=False)
-                img.close()
-                del img
                 payload = buf.getvalue()
-                send_msg(conn, MSG_FRAME, payload)
+                
+                # 简单变化检测：计算 JPEG 数据哈希
+                frame_hash = hashlib.md5(payload[:4096]).hexdigest()  # 只取前4KB做哈希，快速比较
+                
+                if frame_hash != last_hash:
+                    send_msg(conn, MSG_FRAME, payload)
+                    last_hash = frame_hash
+                    same_frame_count = 0
+                else:
+                    same_frame_count += 1
+                    # 连续相同帧超过3次才跳过（保证至少3 FPS更新）
+                    if same_frame_count > 3:
+                        time.sleep(FRAME_INTERVAL)
+                        img.close()
+                        continue
+                    send_msg(conn, MSG_FRAME, payload)
+                
+                img.close()
                 time.sleep(FRAME_INTERVAL)
             except Exception:
                 break
@@ -312,37 +362,44 @@ class HostServer:
                 break
 
     def _execute_event(self, ev):
-        # 通过 App 实例调度到主线程执行 pyautogui
+        # 通过 App 实例调度到主线程执行
         if self._app_root:
             self._app_root.after(0, lambda: self._do_execute(ev))
     
     def _do_execute(self, ev):
         try:
             kind = ev.get("kind")
-            if _pyautogui is None:
-                _log("[服务端] pyautogui未初始化")
-                return
+            x, y = ev.get("x", 0), ev.get("y", 0)
+            btn = ev.get("button", "left")
+            
             if kind == "mouse_move":
-                _pyautogui.moveTo(ev["x"], ev["y"], duration=0)
-                _log(f"[服务端] 执行mouse_move: ({ev['x']}, {ev['y']})")
+                _pyautogui.moveTo(x, y, duration=0)
+                _log(f"[服务端] 执行mouse_move: ({x}, {y})")
             elif kind == "mouse_down":
-                _pyautogui.mouseDown(ev["x"], ev["y"], button=ev.get("button", "left"))
-                _log(f"[服务端] 执行mouse_down: ({ev['x']}, {ev['y']}, btn={ev.get('button')})")
+                _pyautogui.mouseDown(x, y, button=btn)
+                _log(f"[服务端] 执行mouse_down: ({x}, {y}, btn={btn})")
             elif kind == "mouse_up":
-                _pyautogui.mouseUp(ev["x"], ev["y"], button=ev.get("button", "left"))
-                btn = ev.get("button", "left")
-                _pyautogui.click(ev["x"], ev["y"], button=btn)
-                _log(f"[服务端] 执行mouse_up+click: ({ev['x']}, {ev['y']}, btn={btn})")
-            elif kind == "mouse_click":
-                btn = ev.get("button", "left")
-                if ev.get("double"):
-                    _pyautogui.doubleClick(ev["x"], ev["y"], button=btn)
-                    _log(f"[服务端] 执行doubleClick: ({ev['x']}, {ev['y']})")
+                _pyautogui.mouseUp(x, y, button=btn)
+                # 同时使用 Quartz 发送点击（绕过窗口阻挡）
+                if _quartz_mouse:
+                    _quartz_mouse(x, y, btn)
+                    _log(f"[服务端] 执行mouse_up+Quartz_click: ({x}, {y}, btn={btn})")
                 else:
-                    _pyautogui.click(ev["x"], ev["y"], button=btn)
-                    _log(f"[服务端] 执行click: ({ev['x']}, {ev['y']}, btn={btn})")
+                    _pyautogui.click(x, y, button=btn)
+                    _log(f"[服务端] 执行mouse_up+click: ({x}, {y}, btn={btn})")
+            elif kind == "mouse_click":
+                if ev.get("double"):
+                    _pyautogui.doubleClick(x, y, button=btn)
+                    _log(f"[服务端] 执行doubleClick: ({x}, {y})")
+                else:
+                    if _quartz_mouse:
+                        _quartz_mouse(x, y, btn)
+                        _log(f"[服务端] 执行Quartz_click: ({x}, {y}, btn={btn})")
+                    else:
+                        _pyautogui.click(x, y, button=btn)
+                        _log(f"[服务端] 执行click: ({x}, {y}, btn={btn})")
             elif kind == "mouse_scroll":
-                _pyautogui.scroll(ev.get("delta", 1), x=ev["x"], y=ev["y"])
+                _pyautogui.scroll(ev.get("delta", 1), x=x, y=y)
                 _log(f"[服务端] 执行scroll: delta={ev.get('delta')}")
             elif kind == "key_press":
                 _pyautogui.press(ev.get("key", ""))
@@ -353,7 +410,7 @@ class HostServer:
                     _pyautogui.typewrite(ch, interval=0)
                     _log(f"[服务端] 执行key_type: {ch}")
         except Exception as e:
-            _log(f"[服务端] 执行事件失败: {e}, 事件: {ev}")
+            _log(f"[服务端] 执行事件失败: {e}")
 
     def stop(self):
         self.running   = False
@@ -379,6 +436,10 @@ class RemoteClient:
 
     def connect(self, host, port, code):
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # 优化网络性能
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 262144)  # 256KB 接收缓冲
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 262144)  # 256KB 发送缓冲
+        s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)     # 禁用 Nagle 算法
         s.settimeout(6)
         s.connect((host, port))
         s.settimeout(None)
@@ -969,7 +1030,7 @@ class App:
             self._render_frame(data)
         except queue.Empty:
             pass
-        self.root.after(16, self._poll_frames)
+        self.root.after(33, self._poll_frames)  # 约 30 FPS 刷新
 
     def _render_frame(self, data):
         if self._mode != "view" or not hasattr(self, "canvas"):
@@ -978,7 +1039,7 @@ class App:
             cw = self._view_w if self._view_w > 0 else DISPLAY_W
             ch = self._view_h if self._view_h > 0 else DISPLAY_H
             img   = Image.open(io.BytesIO(data))
-            img   = img.resize((cw, ch), Image.BILINEAR)
+            img   = img.resize((cw, ch), Image.NEAREST)
             photo = ImageTk.PhotoImage(img)
             img.close()
             self.canvas.delete("all")
@@ -1032,5 +1093,70 @@ def main():
     app.run()
 
 
+def _run_diagnose():
+    import ctypes
+    import ctypes.util
+    import subprocess
+    log_path = os.path.expanduser("~/Desktop/rc_diagnose.log")
+    if os.path.exists(log_path):
+        os.remove(log_path)
+    
+    def _diag_log(msg):
+        with open(log_path, "a") as f:
+            f.write(f"[{time.strftime('%H:%M:%S')}] {msg}\n")
+        print(msg)
+    
+    _diag_log("=== 打包后诊断 ===")
+    _diag_log(f"Python: {sys.version}")
+    _diag_log(f"可执行文件: {sys.executable}")
+    
+    _diag_log("\n1. 检查辅助功能权限...")
+    try:
+        hiservices = ctypes.CDLL(ctypes.util.find_library("HIServices"))
+        hiservices.AXIsProcessTrusted.restype = ctypes.c_bool
+        hiservices.AXIsProcessTrusted.argtypes = []
+        trusted = hiservices.AXIsProcessTrusted()
+        _diag_log(f"   AXIsProcessTrusted: {trusted}")
+    except Exception as e:
+        _diag_log(f"   检查失败: {e}")
+    
+    _diag_log("\n2. 检查代码签名...")
+    try:
+        result = subprocess.run(['codesign', '-dv', sys.executable], 
+                              capture_output=True, text=True)
+        _diag_log(f"   签名信息: {result.stdout[:300]}")
+    except Exception as e:
+        _diag_log(f"   检查签名失败: {e}")
+    
+    _diag_log("\n3. 尝试 Quartz 发送事件...")
+    try:
+        import Quartz
+        from AppKit import NSEvent
+        
+        loc = NSEvent.mouseLocation()
+        _diag_log(f"   发送前位置: ({loc.x}, {loc.y})")
+        
+        event = Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventMouseMoved, (200, 200), 0)
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
+        _diag_log("   事件已发送")
+        
+        time.sleep(0.3)
+        loc = NSEvent.mouseLocation()
+        _diag_log(f"   发送后位置: ({loc.x}, {loc.y})")
+        
+        if abs(loc.x - 200) < 10 and abs(loc.y - 200) < 10:
+            _diag_log("   ✅ 鼠标移动成功")
+        else:
+            _diag_log("   ❌ 鼠标位置未改变")
+            _diag_log("   原因: 辅助功能权限未生效")
+            
+    except Exception as e:
+        _diag_log(f"   ❌ 失败: {e}")
+    
+    _diag_log("\n=== 诊断完成 ===")
+
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 1 and sys.argv[1] == "--diagnose":
+        _run_diagnose()
+    else:
+        main()
