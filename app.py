@@ -19,6 +19,15 @@ else:
     _base = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _base)
 
+# 调试日志
+def _log(msg):
+    try:
+        log_path = os.path.expanduser("~/Desktop/rc_debug.log")
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(f"[{time.strftime('%H:%M:%S')}] {msg}\n")
+    except Exception:
+        pass
+
 DEFAULT_PORT   = 5900
 JPEG_QUALITY   = 55
 FRAME_INTERVAL = 0.05
@@ -302,6 +311,7 @@ class HostServer:
     def _execute_event(self, ev):
         try:
             if not _check_accessibility_permission():
+                _log(f"[服务端] 无辅助功能权限，跳过事件: {ev.get('kind')}")
                 if not self._access_requested and self.on_accessibility_needed:
                     self._access_requested = True
                     self.on_accessibility_needed()
@@ -309,30 +319,38 @@ class HostServer:
             self._access_requested = False
             kind = ev.get("kind")
             if _pyautogui is None:
+                _log("[服务端] pyautogui未初始化")
                 return
             if kind == "mouse_move":
                 _pyautogui.moveTo(ev["x"], ev["y"], duration=0)
+                _log(f"[服务端] 执行mouse_move: ({ev['x']}, {ev['y']})")
             elif kind == "mouse_down":
                 _pyautogui.mouseDown(ev["x"], ev["y"], button=ev.get("button", "left"))
+                _log(f"[服务端] 执行mouse_down: ({ev['x']}, {ev['y']}, btn={ev.get('button')})")
             elif kind == "mouse_up":
                 _pyautogui.mouseUp(ev["x"], ev["y"], button=ev.get("button", "left"))
+                _log(f"[服务端] 执行mouse_up: ({ev['x']}, {ev['y']}, btn={ev.get('button')})")
             elif kind == "mouse_click":
                 btn = ev.get("button", "left")
                 if ev.get("double"):
                     _pyautogui.doubleClick(ev["x"], ev["y"], button=btn)
+                    _log(f"[服务端] 执行doubleClick: ({ev['x']}, {ev['y']})")
                 else:
                     _pyautogui.click(ev["x"], ev["y"], button=btn)
+                    _log(f"[服务端] 执行click: ({ev['x']}, {ev['y']}, btn={btn})")
             elif kind == "mouse_scroll":
                 _pyautogui.scroll(ev.get("delta", 1), x=ev["x"], y=ev["y"])
+                _log(f"[服务端] 执行scroll: delta={ev.get('delta')}")
             elif kind == "key_press":
                 _pyautogui.press(ev.get("key", ""))
+                _log(f"[服务端] 执行key_press: {ev.get('key')}")
             elif kind == "key_type":
                 ch = ev.get("char", "")
                 if ch:
                     _pyautogui.typewrite(ch, interval=0)
+                    _log(f"[服务端] 执行key_type: {ch}")
         except Exception as e:
-            import sys
-            print(f"[RemoteControl] 执行事件失败: {e}, 事件: {ev}", file=sys.stderr)
+            _log(f"[服务端] 执行事件失败: {e}, 事件: {ev}")
 
     def stop(self):
         self.running   = False
@@ -404,8 +422,9 @@ class RemoteClient:
         if self.connected and self.sock:
             try:
                 send_msg(self.sock, MSG_EVENT, encode_event(ev))
-            except Exception:
-                pass
+                _log(f"[客户端] 发送事件: {ev.get('kind')}, x={ev.get('x')}, y={ev.get('y')}, btn={ev.get('button','')}")
+            except Exception as e:
+                _log(f"[客户端] 发送事件失败: {e}")
 
     def disconnect(self):
         self.connected = False
@@ -846,11 +865,12 @@ class App:
 
         self.canvas.bind("<Configure>",        _on_resize)
         self.canvas.bind("<Motion>",           self._ev_move)
-        self.canvas.bind("<ButtonPress-1>",    lambda e: self._ev_down(e, "left"))
+        # 使用简短形式 <1>/<2>/<3> 和标准 ButtonPress/ButtonRelease 兼容 Windows/Mac
+        self.canvas.bind("<Button-1>",        lambda e: self._ev_down(e, "left"))
         self.canvas.bind("<ButtonRelease-1>",  lambda e: self._ev_up(e, "left"))
-        self.canvas.bind("<ButtonPress-3>",    lambda e: self._ev_down(e, "right"))
+        self.canvas.bind("<Button-3>",        lambda e: self._ev_down(e, "right"))
         self.canvas.bind("<ButtonRelease-3>",  lambda e: self._ev_up(e, "right"))
-        self.canvas.bind("<ButtonPress-2>",    lambda e: self._ev_down(e, "middle"))
+        self.canvas.bind("<Button-2>",        lambda e: self._ev_down(e, "middle"))
         self.canvas.bind("<ButtonRelease-2>",  lambda e: self._ev_up(e, "middle"))
         self.canvas.bind("<Double-Button-1>",  lambda e: self._ev_dblclick(e))
         self.canvas.bind("<MouseWheel>",       self._ev_scroll)
