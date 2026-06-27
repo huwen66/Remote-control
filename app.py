@@ -522,14 +522,31 @@ class App:
                     pass
 
         self.root = tk.Tk()
-        # Windows 高 DPI 下 Tk 会对 geometry() 中的像素值做额外缩放，
-        # 导致实际窗口远小于设定值。在 Tk() 初始化后立即将 scaling 重置
-        # 为 1.0，让窗口大小与代码中设定的像素完全一致。
+
+        # --- DPI / scaling 处理 ---
+        # Mac 默认 DPI=72，Windows 默认 DPI=96，高 DPI 屏更大。
+        # 我们读取系统真实 DPI，以 Mac 的 96 DPI 为基准（Mac 物理感官接近该值）
+        # 计算 UI scale 并写入 tk scaling，使字体和布局在两个平台视觉一致。
         if platform.system() == "Windows":
             try:
-                self.root.tk.call("tk", "scaling", 1.0)
+                import ctypes
+                dpi = ctypes.windll.shcore.GetDpiForMonitor  # 有些系统不可用
+            except Exception:
+                dpi = None
+            try:
+                # 优先用 GetDpiForSystem（更可靠）
+                sys_dpi = ctypes.windll.user32.GetDpiForSystem()
+            except Exception:
+                sys_dpi = 96
+            # 以 96 DPI 为设计基准（与 Mac 视觉等效），scale 超出 2.0 则夹住
+            self._ui_scale = max(1.0, min(2.0, sys_dpi / 96.0))
+            try:
+                self.root.tk.call("tk", "scaling", self._ui_scale)
             except Exception:
                 pass
+        else:
+            # Mac/Linux：让 Tk 保持系统默认 scaling，不干预
+            self._ui_scale = 1.0
         self.root.title("远程控制")
         self.root.configure(bg="#0f1117")
         self.root.lift()
@@ -682,9 +699,16 @@ class App:
         if hasattr(self, "canvas"):
             del self.canvas
 
-        W, H = 900, 600
+        # 以 96 DPI 为设计基准，按实际 scale 等比缩放窗口和字号
+        sc = self._ui_scale
+        W, H = int(900 * sc), int(600 * sc)
         self.root.geometry(f"{W}x{H}")
         self.root.resizable(False, False)
+
+        # 辅助：按 scale 取整字号，最小不低于 1
+        def _fs(base): return max(1, round(base * sc))
+        # 辅助：按 scale 取整间距
+        def _sp(base): return max(1, round(base * sc))
 
         BG       = "#0d1117"
         PANEL    = "#161b22"
@@ -702,22 +726,24 @@ class App:
         DANGER   = "#f85149"
         YELLOW   = "#d29922"
 
+        _body_font  = "Microsoft YaHei" if platform.system() == "Windows" else "Helvetica"
+        _mono_font  = "Consolas"        if platform.system() == "Windows" else "Menlo"
+
         def _pill(parent, text, bg, fg, hover_bg, cmd,
                   pad_x=12, pad_y=5, font_size=11, bold=False):
             lbl = tk.Label(parent, text=text, bg=bg, fg=fg, cursor="hand2",
-                           font=("Helvetica", font_size, "bold" if bold else "normal"),
-                           padx=pad_x, pady=pad_y)
+                           font=(_body_font, _fs(font_size), "bold" if bold else "normal"),
+                           padx=_sp(pad_x), pady=_sp(pad_y))
             lbl.bind("<Button-1>", lambda e: cmd())
             lbl.bind("<Enter>", lambda e: lbl.config(bg=hover_bg))
             lbl.bind("<Leave>", lambda e: lbl.config(bg=bg))
             return lbl
 
-        header = tk.Frame(self.root, bg=BG, height=64)
+        header = tk.Frame(self.root, bg=BG, height=_sp(64))
         header.pack(fill="x")
         header.pack_propagate(False)
-        _title_font = ("Microsoft YaHei", 18, "bold") if platform.system() == "Windows" else ("Helvetica", 18, "bold")
         tk.Label(header, text="远程控制", bg=BG, fg=TEXT,
-                 font=_title_font).pack(side="left", padx=32, pady=18)
+                 font=(_body_font, _fs(18), "bold")).pack(side="left", padx=_sp(32), pady=_sp(18))
 
         sep = tk.Frame(self.root, bg=BORDER_2, height=1)
         sep.pack(fill="x")
@@ -725,35 +751,35 @@ class App:
         body = tk.Frame(self.root, bg=BG)
         body.pack(fill="both", expand=True)
 
-        left  = tk.Frame(body, bg=PANEL, width=340)
+        left  = tk.Frame(body, bg=PANEL, width=_sp(340))
         left.pack(side="left", fill="both", expand=True)
         left.pack_propagate(False)
 
         vdiv = tk.Frame(body, bg=BORDER_2, width=1)
         vdiv.pack(side="left", fill="y")
 
-        right = tk.Frame(body, bg=BG, width=359)
+        right = tk.Frame(body, bg=BG, width=_sp(359))
         right.pack(side="left", fill="both", expand=True)
         right.pack_propagate(False)
 
         tk.Label(left, text="本机信息", bg=PANEL, fg=MUTED,
-                 font=("Helvetica", 11, "bold")).pack(anchor="w", padx=32, pady=(32, 16))
+                 font=(_body_font, _fs(11), "bold")).pack(anchor="w", padx=_sp(32), pady=(_sp(32), _sp(16)))
 
         ip_card = tk.Frame(left, bg=PANEL, highlightthickness=1,
                            highlightbackground=BORDER_2)
-        ip_card.pack(fill="x", padx=32, pady=(0, 12))
+        ip_card.pack(fill="x", padx=_sp(32), pady=(0, _sp(12)))
         ip_inner = tk.Frame(ip_card, bg=CARD)
         ip_inner.pack(fill="x", padx=1, pady=1)
         ip_head = tk.Frame(ip_inner, bg=CARD)
-        ip_head.pack(fill="x", padx=18, pady=(16, 4))
+        ip_head.pack(fill="x", padx=_sp(18), pady=(_sp(16), _sp(4)))
         tk.Label(ip_head, text="设备码（IP）", bg=CARD, fg=MUTED,
-                 font=("Helvetica", 10)).pack(side="left")
+                 font=(_body_font, _fs(10))).pack(side="left")
         _pill(ip_head, "复制", CARD, ACCENT, BORDER_2,
               lambda: self._copy_to_clipboard(self._ip_val.get(), "IP"),
               pad_x=10, pad_y=3, font_size=10).pack(side="right")
         self._ip_val = tk.StringVar(value="获取中...")
         tk.Label(ip_inner, textvariable=self._ip_val, bg=CARD, fg=TEXT,
-                 font=("Helvetica", 22, "bold")).pack(anchor="w", padx=18, pady=(0, 16))
+                 font=(_body_font, _fs(22), "bold")).pack(anchor="w", padx=_sp(18), pady=(0, _sp(16)))
 
         def _fetch_ip():
             ip = get_local_ip()
@@ -762,62 +788,62 @@ class App:
 
         pwd_card = tk.Frame(left, bg=PANEL, highlightthickness=1,
                             highlightbackground=BORDER_2)
-        pwd_card.pack(fill="x", padx=32, pady=(0, 12))
+        pwd_card.pack(fill="x", padx=_sp(32), pady=(0, _sp(12)))
         pwd_inner = tk.Frame(pwd_card, bg=CARD)
         pwd_inner.pack(fill="x", padx=1, pady=1)
         pw_head = tk.Frame(pwd_inner, bg=CARD)
-        pw_head.pack(fill="x", padx=18, pady=(16, 4))
+        pw_head.pack(fill="x", padx=_sp(18), pady=(_sp(16), _sp(4)))
         tk.Label(pw_head, text="连接密码", bg=CARD, fg=MUTED,
-                 font=("Helvetica", 10)).pack(side="left")
+                 font=(_body_font, _fs(10))).pack(side="left")
         pw_right = tk.Frame(pw_head, bg=CARD)
         pw_right.pack(side="right")
         _pill(pw_right, "刷新", CARD, ACCENT, BORDER_2,
-              self._refresh_code, pad_x=10, pad_y=3, font_size=10).pack(side="right", padx=(8, 0))
+              self._refresh_code, pad_x=10, pad_y=3, font_size=10).pack(side="right", padx=(_sp(8), 0))
         _pill(pw_right, "复制", CARD, ACCENT, BORDER_2,
               lambda: self._copy_to_clipboard(self._code_var.get(), "密码"),
               pad_x=10, pad_y=3, font_size=10).pack(side="right")
         self._code_var = tk.StringVar(value=self._code)
         tk.Label(pwd_inner, textvariable=self._code_var, bg=CARD, fg=GREEN,
-                 font=("Menlo", 28, "bold")).pack(anchor="w", padx=18, pady=(0, 16))
+                 font=(_mono_font, _fs(28), "bold")).pack(anchor="w", padx=_sp(18), pady=(0, _sp(16)))
 
         status_wrap = tk.Frame(left, bg=PANEL)
-        status_wrap.pack(fill="x", padx=32, pady=(16, 0))
+        status_wrap.pack(fill="x", padx=_sp(32), pady=(_sp(16), 0))
 
         srv_row = tk.Frame(status_wrap, bg=PANEL)
         srv_row.pack(fill="x")
         self._srv_dot = tk.Label(srv_row, text="●", bg=PANEL, fg=MUTED,
-                                 font=("Helvetica", 9))
+                                 font=(_body_font, _fs(9)))
         self._srv_dot.pack(side="left")
         self._srv_status_var = tk.StringVar(value="初始化中...")
         self._srv_status_lbl = tk.Label(srv_row, textvariable=self._srv_status_var,
                                         bg=PANEL, fg=MUTED,
-                                        font=("Helvetica", 11))
-        self._srv_status_lbl.pack(side="left", padx=(8, 0))
+                                        font=(_body_font, _fs(11)))
+        self._srv_status_lbl.pack(side="left", padx=(_sp(8), 0))
 
         tk.Label(left, text="他人通过以上信息可连接本机", bg=PANEL, fg=MUTED,
-                 font=("Helvetica", 10)).pack(anchor="w", padx=32, pady=(24, 0))
+                 font=(_body_font, _fs(10))).pack(anchor="w", padx=_sp(32), pady=(_sp(24), 0))
 
         tk.Label(right, text="连接到远程", bg=BG, fg=MUTED,
-                 font=("Helvetica", 11, "bold")).pack(anchor="w", padx=36, pady=(32, 16))
+                 font=(_body_font, _fs(11), "bold")).pack(anchor="w", padx=_sp(36), pady=(_sp(32), _sp(16)))
 
         tk.Label(right, text="对方 IP 地址", bg=BG, fg=TEXT_2,
-                 font=("Helvetica", 12)).pack(anchor="w", padx=36, pady=(0, 8))
-        self._ip_entry = tk.Entry(right, font=("Helvetica", 14), bg=CARD,
+                 font=(_body_font, _fs(12))).pack(anchor="w", padx=_sp(36), pady=(0, _sp(8)))
+        self._ip_entry = tk.Entry(right, font=(_body_font, _fs(14)), bg=CARD,
                                   fg=TEXT, insertbackground=TEXT,
                                   relief="flat", highlightthickness=1,
                                   highlightbackground=BORDER_2,
                                   highlightcolor=ACCENT)
-        self._ip_entry.pack(fill="x", padx=36, ipady=10)
+        self._ip_entry.pack(fill="x", padx=_sp(36), ipady=_sp(10))
 
         tk.Label(right, text="连接密码", bg=BG, fg=TEXT_2,
-                 font=("Helvetica", 12)).pack(anchor="w", padx=36, pady=(18, 8))
-        self._pwd_entry = tk.Entry(right, font=("Helvetica", 14), bg=CARD,
+                 font=(_body_font, _fs(12))).pack(anchor="w", padx=_sp(36), pady=(_sp(18), _sp(8)))
+        self._pwd_entry = tk.Entry(right, font=(_body_font, _fs(14)), bg=CARD,
                                    fg=TEXT, insertbackground=TEXT,
                                    relief="flat", highlightthickness=1,
                                    highlightbackground=BORDER_2,
                                    highlightcolor=ACCENT,
                                    show="●")
-        self._pwd_entry.pack(fill="x", padx=36, ipady=10)
+        self._pwd_entry.pack(fill="x", padx=_sp(36), ipady=_sp(10))
 
         self._conn_status_var = tk.StringVar(value="")
         tk.Label(right, textvariable=self._conn_status_var, bg=BG, fg=DANGER,
