@@ -522,6 +522,14 @@ class App:
                     pass
 
         self.root = tk.Tk()
+        # Windows 高 DPI 下 Tk 会对 geometry() 中的像素值做额外缩放，
+        # 导致实际窗口远小于设定值。在 Tk() 初始化后立即将 scaling 重置
+        # 为 1.0，让窗口大小与代码中设定的像素完全一致。
+        if platform.system() == "Windows":
+            try:
+                self.root.tk.call("tk", "scaling", 1.0)
+            except Exception:
+                pass
         self.root.title("远程控制")
         self.root.configure(bg="#0f1117")
         self.root.lift()
@@ -707,8 +715,9 @@ class App:
         header = tk.Frame(self.root, bg=BG, height=64)
         header.pack(fill="x")
         header.pack_propagate(False)
+        _title_font = ("Microsoft YaHei", 18, "bold") if platform.system() == "Windows" else ("Helvetica", 18, "bold")
         tk.Label(header, text="远程控制", bg=BG, fg=TEXT,
-                 font=("Helvetica", 18, "bold")).pack(side="left", padx=32, pady=18)
+                 font=_title_font).pack(side="left", padx=32, pady=18)
 
         sep = tk.Frame(self.root, bg=BORDER_2, height=1)
         sep.pack(fill="x")
