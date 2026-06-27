@@ -202,12 +202,13 @@ def _lazy_server_init():
 
 
 class HostServer:
-    def __init__(self, port, code, on_status, on_permission_needed=None, on_accessibility_needed=None):
+    def __init__(self, port, code, on_status, on_permission_needed=None, on_accessibility_needed=None, app_root=None):
         self.port        = port
         self.code        = code
         self.on_status   = on_status
         self.on_permission_needed = on_permission_needed
         self.on_accessibility_needed = on_accessibility_needed
+        self._app_root   = app_root
         self.server_sock = None
         self.client_sock = None
         self.running     = False
@@ -311,6 +312,11 @@ class HostServer:
                 break
 
     def _execute_event(self, ev):
+        # 通过 App 实例调度到主线程执行 pyautogui
+        if self._app_root:
+            self._app_root.after(0, lambda: self._do_execute(ev))
+    
+    def _do_execute(self, ev):
         try:
             kind = ev.get("kind")
             if _pyautogui is None:
@@ -324,7 +330,9 @@ class HostServer:
                 _log(f"[服务端] 执行mouse_down: ({ev['x']}, {ev['y']}, btn={ev.get('button')})")
             elif kind == "mouse_up":
                 _pyautogui.mouseUp(ev["x"], ev["y"], button=ev.get("button", "left"))
-                _log(f"[服务端] 执行mouse_up: ({ev['x']}, {ev['y']}, btn={ev.get('button')})")
+                btn = ev.get("button", "left")
+                _pyautogui.click(ev["x"], ev["y"], button=btn)
+                _log(f"[服务端] 执行mouse_up+click: ({ev['x']}, {ev['y']}, btn={btn})")
             elif kind == "mouse_click":
                 btn = ev.get("button", "left")
                 if ev.get("double"):
@@ -346,12 +354,6 @@ class HostServer:
                     _log(f"[服务端] 执行key_type: {ch}")
         except Exception as e:
             _log(f"[服务端] 执行事件失败: {e}, 事件: {ev}")
-            # 如果执行失败，检查是否需要辅助功能权限
-            if not _check_accessibility_permission():
-                _log("[服务端] 检测到可能缺少辅助功能权限")
-                if not self._access_requested and self.on_accessibility_needed:
-                    self._access_requested = True
-                    self.on_accessibility_needed()
 
     def stop(self):
         self.running   = False
@@ -470,7 +472,8 @@ class App:
         def _do():
             srv = HostServer(DEFAULT_PORT, self._code, self._on_server_status,
                              on_permission_needed=self._on_permission_needed,
-                             on_accessibility_needed=self._on_accessibility_needed)
+                             on_accessibility_needed=self._on_accessibility_needed,
+                             app_root=self.root)
             try:
                 srv.start()
                 self._server = srv
