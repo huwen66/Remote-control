@@ -847,10 +847,10 @@ class App:
 
         self._conn_status_var = tk.StringVar(value="")
         tk.Label(right, textvariable=self._conn_status_var, bg=BG, fg=DANGER,
-                 font=("Helvetica", 11)).pack(anchor="w", padx=36, pady=(12, 0))
+                 font=(_body_font, _fs(11))).pack(anchor="w", padx=_sp(36), pady=(_sp(12), 0))
 
         btn_wrap = tk.Frame(right, bg=BG)
-        btn_wrap.pack(fill="x", padx=36, pady=(24, 0))
+        btn_wrap.pack(fill="x", padx=_sp(36), pady=(_sp(24), 0))
         self._connect_btn = _pill(btn_wrap, "连  接", ACCENT_BG, "white",
                                   ACCENT_BG_HOVER, self._do_connect,
                                   pad_x=0, pad_y=13, font_size=14, bold=True)
