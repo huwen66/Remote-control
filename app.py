@@ -511,6 +511,16 @@ class RemoteClient:
 
 class App:
     def __init__(self):
+        if platform.system() == "Windows":
+            try:
+                import ctypes
+                ctypes.windll.shcore.SetProcessDpiAwareness(2)
+            except Exception:
+                try:
+                    ctypes.windll.user32.SetProcessDPIAware()
+                except Exception:
+                    pass
+
         self.root = tk.Tk()
         self.root.title("远程控制")
         self.root.configure(bg="#0f1117")
