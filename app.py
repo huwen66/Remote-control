@@ -21,14 +21,6 @@ else:
 sys.path.insert(0, _base)
 
 # 调试日志
-def _log(msg):
-    try:
-        log_path = "/tmp/rc_debug.log"
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(f"[{time.strftime('%H:%M:%S')}] {msg}\n")
-    except Exception:
-        pass
-
 # macOS 底层鼠标事件注入（使用 Quartz）
 _quartz_mouse = None
 if platform.system() == "Darwin":
@@ -55,10 +47,9 @@ if platform.system() == "Darwin":
                 Quartz.CGEventPost(Quartz.kCGHIDEventTap, down)
                 Quartz.CGEventPost(Quartz.kCGHIDEventTap, up)
             except Exception as e:
-                _log(f"Quartz click 失败: {e}")
+                pass
         _quartz_mouse = _quartz_click
     except Exception:
-        _log("Quartz 导入失败")
         _quartz_mouse = None
 
 DEFAULT_PORT   = 5900
@@ -375,43 +366,33 @@ class HostServer:
             
             if kind == "mouse_move":
                 _pyautogui.moveTo(x, y, duration=0)
-                _log(f"[服务端] 执行mouse_move: ({x}, {y})")
             elif kind == "mouse_down":
                 _pyautogui.mouseDown(x, y, button=btn)
-                _log(f"[服务端] 执行mouse_down: ({x}, {y}, btn={btn})")
             elif kind == "mouse_up":
                 _pyautogui.mouseUp(x, y, button=btn)
                 # 同时使用 Quartz 发送点击（绕过窗口阻挡）
                 if _quartz_mouse:
                     _quartz_mouse(x, y, btn)
-                    _log(f"[服务端] 执行mouse_up+Quartz_click: ({x}, {y}, btn={btn})")
                 else:
                     _pyautogui.click(x, y, button=btn)
-                    _log(f"[服务端] 执行mouse_up+click: ({x}, {y}, btn={btn})")
             elif kind == "mouse_click":
                 if ev.get("double"):
                     _pyautogui.doubleClick(x, y, button=btn)
-                    _log(f"[服务端] 执行doubleClick: ({x}, {y})")
                 else:
                     if _quartz_mouse:
                         _quartz_mouse(x, y, btn)
-                        _log(f"[服务端] 执行Quartz_click: ({x}, {y}, btn={btn})")
                     else:
                         _pyautogui.click(x, y, button=btn)
-                        _log(f"[服务端] 执行click: ({x}, {y}, btn={btn})")
             elif kind == "mouse_scroll":
                 _pyautogui.scroll(ev.get("delta", 1), x=x, y=y)
-                _log(f"[服务端] 执行scroll: delta={ev.get('delta')}")
             elif kind == "key_press":
                 _pyautogui.press(ev.get("key", ""))
-                _log(f"[服务端] 执行key_press: {ev.get('key')}")
             elif kind == "key_type":
                 ch = ev.get("char", "")
                 if ch:
                     _pyautogui.typewrite(ch, interval=0)
-                    _log(f"[服务端] 执行key_type: {ch}")
         except Exception as e:
-            _log(f"[服务端] 执行事件失败: {e}")
+                pass
 
     def stop(self):
         self.running   = False
@@ -491,9 +472,8 @@ class RemoteClient:
         if self.connected and self.sock:
             try:
                 send_msg(self.sock, MSG_EVENT, encode_event(ev))
-                _log(f"[客户端] 发送事件: {ev.get('kind')}, x={ev.get('x')}, y={ev.get('y')}, btn={ev.get('button','')}")
             except Exception as e:
-                _log(f"[客户端] 发送事件失败: {e}")
+                pass
 
     def disconnect(self):
         self.connected = False
@@ -523,18 +503,7 @@ class App:
 
         self.root = tk.Tk()
 
-        # ── DPI 处理（Windows 专用）──────────────────────────────────────────
-        # 关键事实：
-        #   1. SetProcessDpiAwareness(2) 已告知 Windows"不要帮我缩放"，
-        #      所以 geometry() 里的数字直接对应物理像素。
-        #   2. tk scaling 只影响【字体点到像素的换算】，不影响 geometry 尺寸。
-        #   3. Mac 上 Tk 默认 scaling = 1.3318（≈96/72），字体和间距显得更大；
-        #      Windows 上 Tk 默认 scaling ≈ 1.0（96dpi 屏），字体更小。
-        #
-        # 正确策略：
-        #   - 用 _dpi_scale（物理像素倍数）缩放 geometry 窗口尺寸
-        #   - 用同样系数设置 tk scaling，让字体也等比放大
-        #   - 两者用同一个系数，内容比例就不会乱
+        # ── DPI 处理（Windows 专用）
         if platform.system() == "Windows":
             try:
                 import ctypes
@@ -565,6 +534,7 @@ class App:
         self._mode                = "home"
         self._view_w              = DISPLAY_W
         self._view_h              = DISPLAY_H
+        self._last_remote_ip      = ""
 
         self._build_home()
         self._auto_start_host()
@@ -584,7 +554,7 @@ class App:
                 self._server = srv
                 self.root.after(0, self._on_host_ready)
             except Exception as e:
-                _log(f"[启动失败] {e}")
+                pass
                 self.root.after(0, self._on_host_fail)
         threading.Thread(target=_do, daemon=True).start()
 
@@ -711,7 +681,10 @@ class App:
         self.root.geometry(f"{W}x{H}")
         self.root.resizable(False, False)
 
-        def _fs(base): return max(1, round(base * sc))
+        # 字体单位是Point，其物理像素高度由 tk scaling 决定。
+        # 由于 __init__ 中 tk scaling 已乘过了 _dpi_scale 倍，这里万不可再乘 sc！
+        def _fs(base): return base
+        # 间距/宽高等单位是物理像素，必须乘 sc 倍
         def _sp(base): return max(1, round(base * sc))
 
         BG       = "#0d1117"
@@ -776,7 +749,7 @@ class App:
         ip_inner.pack(fill="x", padx=1, pady=1)
         ip_head = tk.Frame(ip_inner, bg=CARD)
         ip_head.pack(fill="x", padx=_sp(18), pady=(_sp(16), _sp(4)))
-        tk.Label(ip_head, text="设备码（IP）", bg=CARD, fg=MUTED,
+        tk.Label(ip_head, text="IP地址", bg=CARD, fg=MUTED,
                  font=(_body_font, _fs(10))).pack(side="left")
         _pill(ip_head, "复制", CARD, ACCENT, BORDER_2,
               lambda: self._copy_to_clipboard(self._ip_val.get(), "IP"),
@@ -818,10 +791,20 @@ class App:
         self._srv_dot = tk.Label(srv_row, text="●", bg=PANEL, fg=MUTED,
                                  font=(_body_font, _fs(9)))
         self._srv_dot.pack(side="left")
-        self._srv_status_var = tk.StringVar(value="初始化中...")
+        
+        # 如果从远端断开连接回到主页，由于本地服务一直在跑，这里应该直接显示等待连接
+        is_running = self._server and getattr(self._server, "running", False)
+        initial_text = "● 等待连接" if is_running else "初始化中..."
+        initial_color = "#22c55e" if is_running else MUTED
+        
+        self._srv_status_var = tk.StringVar(value=initial_text)
         self._srv_status_lbl = tk.Label(srv_row, textvariable=self._srv_status_var,
-                                        bg=PANEL, fg=MUTED,
+                                        bg=PANEL, fg=initial_color,
                                         font=(_body_font, _fs(11)))
+        
+        if is_running:
+            self._srv_dot.config(fg="#22c55e")
+            
         self._srv_status_lbl.pack(side="left", padx=(_sp(8), 0))
 
         tk.Label(left, text="他人通过以上信息可连接本机", bg=PANEL, fg=MUTED,
@@ -837,6 +820,9 @@ class App:
                                   relief="flat", highlightthickness=1,
                                   highlightbackground=BORDER_2,
                                   highlightcolor=ACCENT)
+        # 用 _last_remote_ip 填充输入框
+        if getattr(self, "_last_remote_ip", ""):
+            self._ip_entry.insert(0, self._last_remote_ip)
         self._ip_entry.pack(fill="x", padx=_sp(36), ipady=_sp(10))
 
         tk.Label(right, text="连接密码", bg=BG, fg=TEXT_2,
@@ -875,6 +861,10 @@ class App:
     def _do_connect(self):
         host = self._ip_entry.get().strip()
         code = self._pwd_entry.get().strip()
+        
+        # 记录输入的 IP，后续返回 home 页面时回显
+        self._last_remote_ip = host
+        
         if not host:
             self._conn_status_var.set("请输入对方 IP 地址")
             return
@@ -886,18 +876,15 @@ class App:
 
         def _bg():
             cli = RemoteClient()
-            _log(f"[客户端] 开始连接 {host}:{DEFAULT_PORT}")
             try:
                 cli.connect(host, DEFAULT_PORT, code)
             except PermissionError as e:
-                _log(f"[客户端] 密码错误: {e}")
                 self.root.after(0, self._on_connect_fail, str(e))
                 return
             except Exception as e:
-                _log(f"[客户端] 连接异常: {type(e).__name__}: {e}")
+                pass
                 self.root.after(0, self._on_connect_fail, f"连接失败: {e}")
                 return
-            _log("[客户端] 连接成功")
             self.root.after(0, self._on_connect_ok, cli)
 
         threading.Thread(target=_bg, daemon=True).start()
@@ -1146,70 +1133,5 @@ def main():
     app.run()
 
 
-def _run_diagnose():
-    import ctypes
-    import ctypes.util
-    import subprocess
-    log_path = "/tmp/rc_diagnose.log"
-    if os.path.exists(log_path):
-        os.remove(log_path)
-    
-    def _diag_log(msg):
-        with open(log_path, "a") as f:
-            f.write(f"[{time.strftime('%H:%M:%S')}] {msg}\n")
-        print(msg)
-    
-    _diag_log("=== 打包后诊断 ===")
-    _diag_log(f"Python: {sys.version}")
-    _diag_log(f"可执行文件: {sys.executable}")
-    
-    _diag_log("\n1. 检查辅助功能权限...")
-    try:
-        hiservices = ctypes.CDLL(ctypes.util.find_library("HIServices"))
-        hiservices.AXIsProcessTrusted.restype = ctypes.c_bool
-        hiservices.AXIsProcessTrusted.argtypes = []
-        trusted = hiservices.AXIsProcessTrusted()
-        _diag_log(f"   AXIsProcessTrusted: {trusted}")
-    except Exception as e:
-        _diag_log(f"   检查失败: {e}")
-    
-    _diag_log("\n2. 检查代码签名...")
-    try:
-        result = subprocess.run(['codesign', '-dv', sys.executable], 
-                              capture_output=True, text=True)
-        _diag_log(f"   签名信息: {result.stdout[:300]}")
-    except Exception as e:
-        _diag_log(f"   检查签名失败: {e}")
-    
-    _diag_log("\n3. 尝试 Quartz 发送事件...")
-    try:
-        import Quartz
-        from AppKit import NSEvent
-        
-        loc = NSEvent.mouseLocation()
-        _diag_log(f"   发送前位置: ({loc.x}, {loc.y})")
-        
-        event = Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventMouseMoved, (200, 200), 0)
-        Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
-        _diag_log("   事件已发送")
-        
-        time.sleep(0.3)
-        loc = NSEvent.mouseLocation()
-        _diag_log(f"   发送后位置: ({loc.x}, {loc.y})")
-        
-        if abs(loc.x - 200) < 10 and abs(loc.y - 200) < 10:
-            _diag_log("   ✅ 鼠标移动成功")
-        else:
-            _diag_log("   ❌ 鼠标位置未改变")
-            _diag_log("   原因: 辅助功能权限未生效")
-            
-    except Exception as e:
-        _diag_log(f"   ❌ 失败: {e}")
-    
-    _diag_log("\n=== 诊断完成 ===")
-
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "--diagnose":
-        _run_diagnose()
-    else:
-        main()
+    main()
