@@ -539,7 +539,8 @@ class App:
                 srv.start()
                 self._server = srv
                 self.root.after(0, self._on_host_ready)
-            except Exception:
+            except Exception as e:
+                _log(f"[启动失败] {e}")
                 self.root.after(0, self._on_host_fail)
         threading.Thread(target=_do, daemon=True).start()
 
