@@ -308,6 +308,8 @@ class HostServer:
                 return
             self._access_requested = False
             kind = ev.get("kind")
+            if _pyautogui is None:
+                return
             if kind == "mouse_move":
                 _pyautogui.moveTo(ev["x"], ev["y"], duration=0)
             elif kind == "mouse_down":
@@ -328,8 +330,9 @@ class HostServer:
                 ch = ev.get("char", "")
                 if ch:
                     _pyautogui.typewrite(ch, interval=0)
-        except Exception:
-            pass
+        except Exception as e:
+            import sys
+            print(f"[RemoteControl] 执行事件失败: {e}, 事件: {ev}", file=sys.stderr)
 
     def stop(self):
         self.running   = False
@@ -874,6 +877,9 @@ class App:
         if not self._client:
             return
         x, y = self._map(e.x, e.y)
+        if not hasattr(self, "_mouse_down_info"):
+            self._mouse_down_info = {}
+        self._mouse_down_info[btn] = (x, y, time.time())
         self._client.send_event({"kind": "mouse_down", "x": x, "y": y, "button": btn})
 
     def _ev_up(self, e, btn):
@@ -881,6 +887,14 @@ class App:
             return
         x, y = self._map(e.x, e.y)
         self._client.send_event({"kind": "mouse_up", "x": x, "y": y, "button": btn})
+        if hasattr(self, "_mouse_down_info") and btn in self._mouse_down_info:
+            dx, dy, dt = self._mouse_down_info[btn]
+            duration = time.time() - dt
+            dist = ((x - dx) ** 2 + (y - dy) ** 2) ** 0.5
+            if duration < 0.5 and dist < 10:
+                self._client.send_event({"kind": "mouse_click", "x": x, "y": y,
+                                          "button": btn, "double": False})
+            del self._mouse_down_info[btn]
 
     def _ev_dblclick(self, e):
         if not self._client:
