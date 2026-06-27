@@ -530,22 +530,19 @@ class App:
         if platform.system() == "Windows":
             try:
                 import ctypes
-                dpi = ctypes.windll.shcore.GetDpiForMonitor  # 有些系统不可用
-            except Exception:
-                dpi = None
-            try:
-                # 优先用 GetDpiForSystem（更可靠）
                 sys_dpi = ctypes.windll.user32.GetDpiForSystem()
             except Exception:
                 sys_dpi = 96
-            # 以 96 DPI 为设计基准（与 Mac 视觉等效），scale 超出 2.0 则夹住
-            self._ui_scale = max(1.0, min(2.0, sys_dpi / 96.0))
+            # Mac 的 Tk 默认 scaling = screen_dpi/72，Windows 用同一公式对齐，
+            # 使两端 geometry("900x600") 对应相同的物理感知尺寸。
+            win_scaling = sys_dpi / 72.0
+            self._ui_scale = win_scaling
             try:
-                self.root.tk.call("tk", "scaling", self._ui_scale)
+                self.root.tk.call("tk", "scaling", win_scaling)
             except Exception:
                 pass
         else:
-            # Mac/Linux：让 Tk 保持系统默认 scaling，不干预
+            # Mac/Linux：保持 Tk 系统默认 scaling，不干预
             self._ui_scale = 1.0
         self.root.title("远程控制")
         self.root.configure(bg="#0f1117")
