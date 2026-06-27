@@ -699,16 +699,15 @@ class App:
         if hasattr(self, "canvas"):
             del self.canvas
 
-        # 以 96 DPI 为设计基准，按实际 scale 等比缩放窗口和字号
-        sc = self._ui_scale
-        W, H = int(900 * sc), int(600 * sc)
+        # tk scaling 已经把逻辑点换算为物理像素，这里直接用设计值即可。
+        # 不要再乘 _ui_scale，否则会双重放大。
+        W, H = 900, 600
         self.root.geometry(f"{W}x{H}")
         self.root.resizable(False, False)
 
-        # 辅助：按 scale 取整字号，最小不低于 1
-        def _fs(base): return max(1, round(base * sc))
-        # 辅助：按 scale 取整间距
-        def _sp(base): return max(1, round(base * sc))
+        # 无需额外缩放，_fs/_sp 直接返回原值
+        def _fs(base): return base
+        def _sp(base): return base
 
         BG       = "#0d1117"
         PANEL    = "#161b22"
