@@ -1,5 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
+import PyInstaller.config
+PyInstaller.config.CONF['cachedir'] = '/tmp/pyinstaller_rc_cache'
 block_cipher = None
 src_dir = os.path.abspath('.')
 

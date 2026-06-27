@@ -23,7 +23,7 @@ sys.path.insert(0, _base)
 # 调试日志
 def _log(msg):
     try:
-        log_path = os.path.expanduser("~/Desktop/rc_debug.log")
+        log_path = "/tmp/rc_debug.log"
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(f"[{time.strftime('%H:%M:%S')}] {msg}\n")
     except Exception:
@@ -257,6 +257,7 @@ class HostServer:
         self.running     = True
         self.server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.server_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.server_sock.bind(("0.0.0.0", self.port))
         self.server_sock.listen(1)
         threading.Thread(target=self._accept_loop, daemon=True).start()
@@ -435,13 +436,17 @@ class RemoteClient:
         self._frame_queue  = queue.Queue(maxsize=2)
 
     def connect(self, host, port, code):
+        # 绕过系统代理，直接连接局域网
+        for var in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY",
+                    "all_proxy", "ALL_PROXY", "socks_proxy", "SOCKS_PROXY"):
+            os.environ.pop(var, None)
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        # 优化网络性能
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 262144)  # 256KB 接收缓冲
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 262144)  # 256KB 发送缓冲
-        s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)     # 禁用 Nagle 算法
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 262144)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 262144)
+        s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         s.settimeout(6)
-        s.connect((host, port))
+        ipv4 = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)[0][4][0]
+        s.connect((ipv4, port))
         s.settimeout(None)
         send_msg(s, MSG_AUTH, code.encode("utf-8"))
         msg_type, payload = recv_msg(s)
@@ -659,7 +664,7 @@ class App:
         if hasattr(self, "canvas"):
             del self.canvas
 
-        W, H = 700, 480
+        W, H = 900, 600
         self.root.geometry(f"{W}x{H}")
         self.root.resizable(False, False)
 
@@ -694,8 +699,6 @@ class App:
         header.pack_propagate(False)
         tk.Label(header, text="远程控制", bg=BG, fg=TEXT,
                  font=("Helvetica", 18, "bold")).pack(side="left", padx=32, pady=18)
-        tk.Label(header, text="v3.0", bg=BG, fg=MUTED,
-                 font=("Helvetica", 11)).pack(side="left", pady=26)
 
         sep = tk.Frame(self.root, bg=BORDER_2, height=1)
         sep.pack(fill="x")
@@ -808,13 +811,6 @@ class App:
                                   pad_x=0, pad_y=13, font_size=14, bold=True)
         self._connect_btn.pack(fill="x")
 
-        hint = tk.Frame(right, bg=BG)
-        hint.pack(fill="x", padx=36, pady=(28, 0))
-        tk.Label(hint, text="•", bg=BG, fg=MUTED,
-                 font=("Helvetica", 10)).pack(side="left")
-        tk.Label(hint, text="  被控端需授权「屏幕录制」和「辅助功能」",
-                 bg=BG, fg=MUTED, font=("Helvetica", 10)).pack(side="left")
-
         self.root.protocol("WM_DELETE_WINDOW", self._on_close_home)
 
     def _change_code(self):
@@ -841,14 +837,18 @@ class App:
 
         def _bg():
             cli = RemoteClient()
+            _log(f"[客户端] 开始连接 {host}:{DEFAULT_PORT}")
             try:
                 cli.connect(host, DEFAULT_PORT, code)
             except PermissionError as e:
+                _log(f"[客户端] 密码错误: {e}")
                 self.root.after(0, self._on_connect_fail, str(e))
                 return
             except Exception as e:
+                _log(f"[客户端] 连接异常: {type(e).__name__}: {e}")
                 self.root.after(0, self._on_connect_fail, f"连接失败: {e}")
                 return
+            _log("[客户端] 连接成功")
             self.root.after(0, self._on_connect_ok, cli)
 
         threading.Thread(target=_bg, daemon=True).start()
@@ -895,7 +895,7 @@ class App:
         self.root.geometry(f"{DISPLAY_W}x{DISPLAY_H + 44}")
         self.root.resizable(True, True)
 
-        BG_BAR = "#1a1d27"
+        BG_BAR = "#161b22"
         bar = tk.Frame(self.root, bg=BG_BAR, height=44)
         bar.pack(fill="x")
         bar.pack_propagate(False)
@@ -915,10 +915,13 @@ class App:
             tk.Label(left_bar, text=f"  {host_ip}", bg=BG_BAR, fg="#64748b",
                      font=("Helvetica", 10)).pack(side="left", pady=10)
 
-        tk.Button(bar, text="断开连接", bg="#ef4444", fg="white",
-                  font=("Helvetica", 10, "bold"), relief="flat",
-                  padx=14, pady=4, cursor="hand2",
-                  command=self._disconnect_and_home).pack(side="right", padx=12, pady=8)
+        disc_btn = tk.Label(bar, text=" 断开连接 ", bg="#ef4444", fg="white",
+                            font=("Helvetica", 10, "bold"), cursor="hand2",
+                            padx=6, pady=0)
+        disc_btn.pack(side="right", padx=12, pady=10)
+        disc_btn.bind("<Button-1>", lambda e: self._disconnect_and_home())
+        disc_btn.bind("<Enter>", lambda e: disc_btn.config(bg="#dc2626"))
+        disc_btn.bind("<Leave>", lambda e: disc_btn.config(bg="#ef4444"))
 
         self.canvas = tk.Canvas(self.root, bg="#000000",
                                 highlightthickness=0, cursor="crosshair")
@@ -1098,7 +1101,7 @@ def _run_diagnose():
     import ctypes
     import ctypes.util
     import subprocess
-    log_path = os.path.expanduser("~/Desktop/rc_diagnose.log")
+    log_path = "/tmp/rc_diagnose.log"
     if os.path.exists(log_path):
         os.remove(log_path)
     
